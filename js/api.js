@@ -1,8 +1,8 @@
 // Everything that talks to Supabase lives here, so the views stay simple.
-import { cfg, isConfigured } from './config.js';
+import { supabaseUrl, supabaseKey, isConfigured } from './config.js';
 
 export const sb = isConfigured()
-  ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
+  ? window.supabase.createClient(supabaseUrl(), supabaseKey(), {
     auth: { flowType: 'implicit', persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
   })
   : null;

@@ -6,5 +6,11 @@ export const cfg = {
   SUPABASE_ANON_KEY: 'sb_publishable_Wetg7elpebFNOeUCp6ZiMw_zV3X8GOp',
 };
 
+// Accepts the URL however it was pasted: strips spaces, a trailing "/", or extra paths like "/rest/v1".
+export const supabaseUrl = () => {
+  try { return new URL(cfg.SUPABASE_URL.trim()).origin; } catch { return ''; }
+};
+export const supabaseKey = () => cfg.SUPABASE_ANON_KEY.trim();
+
 export const isConfigured = () =>
-  cfg.SUPABASE_URL.startsWith('https://') && !/YOUR-/.test(cfg.SUPABASE_URL + cfg.SUPABASE_ANON_KEY);
+  supabaseUrl().startsWith('https://') && !/YOUR-/.test(cfg.SUPABASE_URL + cfg.SUPABASE_ANON_KEY);
