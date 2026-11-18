@@ -1,0 +1,14 @@
+{
+  "name": "project-expense-tracker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared expense tracker for group projects (static site + Supabase).",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "serve": "npx --yes serve ."
+  },
+  "devDependencies": {
+    "xlsx": "0.18.5"
+  }
+}
