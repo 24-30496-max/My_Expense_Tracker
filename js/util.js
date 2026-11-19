@@ -59,6 +59,7 @@ export function toast(message, kind = 'ok') {
   let box = document.getElementById('toasts');
   if (!box) { box = h('div', { id: 'toasts', 'aria-live': 'polite' }); document.body.append(box); }
   const t = h('div', { class: `toast ${kind}`, role: kind === 'error' ? 'alert' : 'status' }, message);
+  while (box.children.length >= 3) box.firstChild.remove();
   box.append(t);
   setTimeout(() => t.remove(), kind === 'error' ? 7000 : 3500);
 }

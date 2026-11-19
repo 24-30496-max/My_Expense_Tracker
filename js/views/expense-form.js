@@ -1,6 +1,6 @@
 // Add / view / edit one expense, including receipt photos and its edit history.
 import * as api from '../api.js';
-import { state, refreshProject, canEditExpense, isActive, memberName, receiptsOf, memberByUser } from '../store.js';
+import { state, refreshProject, canEditExpense, isActive, memberName, receiptsOf, memberByUser, holderOf } from '../store.js';
 import { h, select, field, modal, today, toast, confirmBox, fmtDateTime, STATUS_LABEL } from '../util.js';
 import { toCents, centsToPlain, formatMoney, expenseTotal } from '../money.js';
 import { splitEqual } from '../settlement.js';
@@ -146,6 +146,7 @@ export function openExpenseDialog(expense = null) {
     h('div', { class: 'row3' }, field('Qty', f.qty), field(`Unit price (${cur})`, f.price), field('Extra fees', f.fees, 'Shipping, tax')),
     h('div', { class: 'total-row' }, h('span', {}, 'Total'), totalOut),
     splitOut,
+    isNew ? null : h('p', { class: 'split-line' }, holderOf(expense.id) ? `Held by ${holderOf(expense.id).name}. ` : 'Not assigned to anyone yet. ', h('a', { href: `#/p/${state.pid}/owners`, onclick: () => document.querySelector('dialog')?.close() }, 'See Owners')),
     h('div', { class: 'row2' }, field('Date', f.date), field('Paid by', f.paid_by)),
     h('div', { class: 'row2' }, field('Store', f.store), field('Link', f.link)),
     field('Notes', f.notes),

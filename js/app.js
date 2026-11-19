@@ -1,7 +1,7 @@
 // App shell: sign-in state, routing, header and tabs.
 import { isConfigured } from './config.js';
 import * as api from './api.js';
-import { state, onState, setUser, openProject, closeProject, refreshProjects, isActive } from './store.js';
+import { state, onState, setUser, openProject, closeProject, refreshProjects, isActive, isOwner, pendingRequests } from './store.js';
 import { h, $, toast, debounce } from './util.js';
 import { renderLogin } from './views/login.js';
 import { renderProjects, renderNewProject } from './views/projects.js';
@@ -10,11 +10,12 @@ import { renderExpenses } from './views/expenses.js';
 import { renderSettle } from './views/settle.js';
 import { renderImport } from './views/import.js';
 import { renderProject } from './views/project.js';
+import { renderOwners } from './views/owners.js';
 import { openExpenseDialog } from './views/expense-form.js';
 
 const root = $('#app');
-const TABS = [['overview', 'Overview'], ['expenses', 'Expenses'], ['settle', 'Settle up'], ['import', 'Import'], ['project', 'Project']];
-const VIEWS = { overview: renderOverview, expenses: renderExpenses, settle: renderSettle, import: renderImport, project: renderProject };
+const TABS = [['overview', 'Overview'], ['expenses', 'Expenses'], ['owners', 'Owners'], ['settle', 'Settle up'], ['project', 'Project']];
+const VIEWS = { overview: renderOverview, expenses: renderExpenses, owners: renderOwners, settle: renderSettle, import: renderImport, project: renderProject };
 
 let loadError = '';
 let lastKey = '';
@@ -44,8 +45,11 @@ function shell(route) {
     h('span', { class: 'spacer' }),
     h('span', { class: 'who muted' }, state.user.email),
     h('button', { class: 'btn small', onclick: () => api.auth.signOut() }, 'Sign out'));
+  const needsReview = inProject && isOwner() ? pendingRequests().length : 0;
+  const activeTab = route.tab === 'import' ? 'project' : route.tab; // Import lives under Project
   const nav = inProject ? h('nav', { class: 'tabs', 'aria-label': 'Sections' }, TABS.map(([key, label]) =>
-    h('a', { href: `#/p/${state.pid}/${key}`, class: route.tab === key ? 'on' : '', 'aria-current': route.tab === key ? 'page' : null }, label))) : null;
+    h('a', { href: `#/p/${state.pid}/${key}`, class: activeTab === key ? 'on' : '', 'aria-current': activeTab === key ? 'page' : null },
+      label, key === 'owners' && needsReview ? h('span', { class: 'badge', 'aria-label': `${needsReview} requests to review` }, needsReview) : null))) : null;
   const main = h('main', { id: 'view', class: 'view' });
   const fab = inProject && isActive() && ['overview', 'expenses'].includes(route.tab)
     ? h('button', { class: 'fab', onclick: () => openExpenseDialog(null), 'aria-label': 'Add expense' }, h('span', { 'aria-hidden': 'true' }, '+'), ' Add expense')
@@ -86,7 +90,7 @@ async function route() {
       if (state.pid !== r.pid) { paint(); await openProject(r.pid); }
     } else {
       if (state.pid) closeProject();
-      if (r.name === 'home') await refreshProjects();
+      if (r.name === 'home') { try { await api.claim(); } catch { /* not fatal */ } await refreshProjects(); }
     }
   } catch (err) { loadError = err.message; }
   paint();
@@ -113,7 +117,11 @@ async function boot() {
 }
 
 window.addEventListener('hashchange', () => route());
-window.addEventListener('resize', debounce(() => { if (state.user) paint(); }, 250));
+// Only the Overview charts depend on the window width. Never redraw while someone is typing:
+// on phones the on-screen keyboard resizes the window, and a redraw would wipe the form.
+window.addEventListener('resize', debounce(() => {
+  if (state.user && parseRoute().tab === 'overview' && !typingInView()) paint();
+}, 250));
 // A teammate's change arrives while you are typing in a field: hold the redraw until you leave it.
 let pendingPaint = false;
 const typingInView = () => {

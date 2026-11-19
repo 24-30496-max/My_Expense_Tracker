@@ -11,6 +11,8 @@ export const state = {
   expenses: [],
   payments: [],
   receipts: [],
+  assignments: [],
+  requests: [],
   urls: {}, // storage path -> signed url
   me: null, // my member row in the open project
 };
@@ -28,7 +30,7 @@ export function setUser(user) {
 
 export function closeProject() {
   if (unsubscribe) { unsubscribe(); unsubscribe = null; }
-  Object.assign(state, { pid: null, project: null, members: [], expenses: [], payments: [], receipts: [], urls: {}, me: null });
+  Object.assign(state, { pid: null, project: null, members: [], expenses: [], payments: [], receipts: [], assignments: [], requests: [], urls: {}, me: null });
 }
 
 async function fetchProject(pid) {
@@ -40,6 +42,8 @@ async function fetchProject(pid) {
   state.expenses = data.expenses;
   state.payments = data.payments;
   state.receipts = data.receipts;
+  state.assignments = data.assignments;
+  state.requests = data.requests;
   state.me = data.members.find((m) => m.user_id === state.user.id) || null;
   const missing = data.receipts.map((r) => r.thumb_path || r.path).filter((p) => !state.urls[p]);
   if (missing.length) {
@@ -82,3 +86,14 @@ export const canEditExpense = (e) =>
   isActive() && !!state.me && (e.created_by === state.user.id || e.paid_by === state.me.id);
 export const receiptsOf = (expenseId) => state.receipts.filter((r) => r.expense_id === expenseId);
 export const memberByUser = (uid) => state.members.find((m) => m.user_id === uid);
+
+// ---------- component owners ----------
+/** The member who holds this component, or null if nobody has been assigned yet. */
+export const holderOf = (expenseId) => {
+  const a = state.assignments.find((x) => x.expense_id === expenseId);
+  return a ? state.members.find((m) => m.id === a.member_id) || null : null;
+};
+const expenseAlive = (id) => state.expenses.some((e) => e.id === id && !e.deleted_at);
+export const pendingRequests = () => state.requests.filter((r) => r.status === 'pending' && expenseAlive(r.expense_id));
+export const myPendingFor = (expenseId) =>
+  state.requests.find((r) => r.status === 'pending' && r.expense_id === expenseId && state.me && r.requester_member === state.me.id);

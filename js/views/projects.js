@@ -33,7 +33,7 @@ export function renderNewProject(main) {
   const rows = [];
   const list = h('div', { class: 'member-rows' });
   const addRow = (n = '', e = '', locked = false) => {
-    const r = { n: h('input', { type: 'text', value: n, placeholder: 'Name', 'aria-label': 'Member name' }), e: h('input', { type: 'email', value: e, placeholder: 'Email', disabled: locked, 'aria-label': 'Member email' }), locked };
+    const r = { n: h('input', { type: 'text', value: n, placeholder: 'Name', 'aria-label': 'Member name' }), e: h('input', { type: 'email', value: e, placeholder: locked ? 'Email' : 'Email (optional)', disabled: locked, 'aria-label': 'Member email' }), locked };
     rows.push(r);
     list.append(h('div', { class: 'row-add' }, r.n, r.e, locked ? h('span', { class: 'muted' }, 'You') : null));
   };
@@ -45,7 +45,7 @@ export function renderNewProject(main) {
     field('Project name', name),
     h('div', { class: 'row2' }, field('Currency', currency), field('Budget', budget, 'You can set or change this later.')),
     h('fieldset', {}, h('legend', {}, 'Members'),
-      h('p', { class: 'muted' }, 'Add everyone who shares the costs, including you. Each person signs in with the email you enter here. Expenses are split equally.'),
+      h('p', { class: 'muted' }, 'Add everyone who shares the costs, including you. A name alone is enough: that member is temporary, and you can assign their email later. Expenses are split equally.'),
       list,
       h('button', { class: 'btn small', type: 'button', onclick: () => addRow() }, 'Add another member')),
     msg,
@@ -57,9 +57,10 @@ export function renderNewProject(main) {
     ev.preventDefault();
     msg.textContent = '';
     const members = rows.map((r) => ({ name: r.n.value.trim(), email: r.e.value.trim().toLowerCase() })).filter((m) => m.name || m.email);
+    const emails = members.map((m) => m.email).filter(Boolean);
     if (!name.value.trim()) { msg.textContent = 'Give the project a name.'; return; }
-    if (members.some((m) => !m.name || !/^\S+@\S+\.\S+$/.test(m.email))) { msg.textContent = 'Every member needs a name and a valid email.'; return; }
-    if (new Set(members.map((m) => m.email)).size !== members.length) { msg.textContent = 'Two members have the same email.'; return; }
+    if (members.some((m) => !m.name || (m.email && !/^\S+@\S+\.\S+$/.test(m.email)))) { msg.textContent = 'Every member needs a name. If you enter an email it must be valid.'; return; }
+    if (new Set(emails).size !== emails.length) { msg.textContent = 'Two members have the same email.'; return; }
     const b = budget.value.trim() === '' ? null : toCents(budget.value);
     if (b !== null && (Number.isNaN(b) || b < 0)) { msg.textContent = 'Budget must be a number, or empty.'; return; }
     try {

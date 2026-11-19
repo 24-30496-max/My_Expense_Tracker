@@ -11,16 +11,18 @@ A shared expense tracker for group projects. Log what you buy (with receipt phot
 | Tab | What it does |
 |---|---|
 | Overview | Total spent, budget left, who paid what, spending by category and over time |
-| Expenses | Search and filter everything bought; add, edit, delete and restore; attach receipt photos |
+| Expenses | Search and filter everything bought, as a list or as cards; add, edit, delete and restore; attach receipt photos |
+| Owners | Who holds each component. The project creator assigns items, members request items, the creator approves or declines |
 | Settle up | Shows who is above or below an equal split, the fewest payments to square up, and a record of payments made |
-| Import | Bring in past expenses from CSV or Excel, with a preview before saving |
-| Project | Excel/CSV export, budget, categories, members, archive the project |
+| Project | Import past expenses (CSV or Excel, with a preview), Excel/CSV export, budget, categories, members, archive the project |
 
 Rules worth knowing:
 - You can edit an expense only if you **added it or paid for it**. Anyone can view everything.
 - Deleting is a soft delete ("Show deleted" lets you restore). Every edit is recorded in the expense's history.
 - Items with status **Needed** are planned purchases: they show up in the list but are not counted in spending or splits until you change them to Ordered, Received or Used.
 - Only the project creator manages members, budget, categories and archiving.
+- **Temporary members:** add a member by name only (no email). You can record expenses for them and assign items to them straight away. When you have their email, open Project > Members and tap **Assign email**; the first time they sign in with it they are linked to that name and everything under it. An email can be assigned once.
+- **Component owners:** "owner" means who holds or keeps the item, which can differ from who paid. The creator assigns items on the Owners tab. Any member can request an item they do not hold (with a note); the creator sees a badge on the Owners tab and approves or declines. Approving assigns the item and closes other open requests for it.
 
 ---
 
@@ -68,6 +70,12 @@ Two options on the login screen:
 
 Photos are shrunk in your browser before upload (about 1600 px, usually 150 to 400 KB) plus a small preview. They are stored in a **private** bucket: only project members can see them, through short-lived links. The Supabase free tier includes 1 GB of storage, which is thousands of receipts.
 
+## Updating an existing install
+
+When a new version adds features:
+1. Run the new `supabase/schema.sql` in the Supabase SQL Editor again. It only adds what is missing and keeps your data.
+2. Upload the new files to GitHub, but **keep your own `js/config.js`** (it holds your keys). The site redeploys by itself.
+
 ## Reusing it for future projects
 
 Go to **Project > Archive project** when you are done. Everything stays viewable and exportable but locked. From the project list click **New project** to start the next one with the same or different people.
@@ -94,7 +102,7 @@ js/store.js           shared state
 js/settlement.js      equal split, balances, fewest payments (integer centavos)
 js/importer.js        spreadsheet to expenses
 js/money.js, image.js, util.js
-js/views/             one file per screen
+js/views/             one file per screen (expenses, owners, settle, import, project, ...)
 supabase/schema.sql   tables, security rules, receipt storage
 tests/                unit tests
 ```

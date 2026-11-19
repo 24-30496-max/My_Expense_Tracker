@@ -29,6 +29,8 @@ create table if not exists public.project_members (
   unique (project_id, email)
 );
 create index if not exists project_members_user_idx on public.project_members(user_id);
+-- A member can be added by name only ("temporary"); the owner assigns an email later.
+alter table public.project_members alter column email drop not null;
 
 create table if not exists public.expenses (
   id               uuid primary key default gen_random_uuid(),
@@ -162,11 +164,10 @@ begin
   returning id into pid;
 
   for m in select * from jsonb_array_elements(p_members) loop
-    em := lower(trim(m ->> 'email'));
-    if em is null or em = '' then raise exception 'Every member needs an email'; end if;
+    em := nullif(lower(trim(m ->> 'email')), '');
     insert into project_members (project_id, name, email, user_id)
     values (pid, trim(m ->> 'name'), em, case when em = my_email then auth.uid() end);
-    if em = my_email then linked := true; end if;
+    if em is not null and em = my_email then linked := true; end if;
   end loop;
 
   if not linked then raise exception 'Your own email (%) must be in the member list', my_email; end if;
@@ -200,21 +201,25 @@ drop trigger if exists expenses_before_update on public.expenses;
 create trigger expenses_before_update before update on public.expenses
   for each row execute function public.expenses_before_update();
 
--- Members: only the name can be edited directly. Linking a sign-in to a member happens only
--- through claim_memberships(), so nobody can attach (or steal) someone else's account.
+-- Members: tidy the email, and only the name (or a still-missing email) can be edited directly.
+-- Linking a sign-in to a member happens only through claim_memberships(), so nobody can
+-- attach (or steal) someone else's account.
 create or replace function public.members_guard() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  if current_user in ('authenticated', 'anon') then
-    if new.user_id is distinct from old.user_id or new.email <> old.email or new.project_id <> old.project_id then
-      raise exception 'Only the name of a member can be changed';
+  new.name := trim(new.name);
+  new.email := nullif(lower(trim(coalesce(new.email, ''))), '');
+  if tg_op = 'UPDATE' and current_user in ('authenticated', 'anon') then
+    if new.user_id is distinct from old.user_id or new.project_id <> old.project_id
+       or (old.email is not null and new.email is distinct from old.email) then
+      raise exception 'Only the name of a member can be changed (an email can be added once, to a member that has none)';
     end if;
   end if;
   return new;
 end $$;
 
 drop trigger if exists members_guard on public.project_members;
-create trigger members_guard before update on public.project_members
+create trigger members_guard before insert or update on public.project_members
   for each row execute function public.members_guard();
 
 -- ---------- Security rules (Row Level Security) ----------
@@ -302,6 +307,125 @@ create policy payments_update on public.payments for update to authenticated
   using (created_by = auth.uid() and project_active(project_id))
   with check (created_by = auth.uid() and project_active(project_id));
 
+-- ---------- Component owners and requests ----------
+-- "Owner" of a component = the member who holds/keeps it (not necessarily who paid).
+-- The project creator assigns it; any member can request an item; the creator approves.
+
+create table if not exists public.component_assignments (
+  expense_id   uuid primary key references public.expenses(id) on delete cascade,
+  project_id   uuid not null references public.projects(id) on delete cascade,
+  member_id    uuid not null references public.project_members(id) on delete cascade,
+  assigned_by  uuid not null default auth.uid(),
+  assigned_at  timestamptz not null default now()
+);
+create index if not exists component_assignments_project_idx on public.component_assignments(project_id);
+
+create table if not exists public.component_requests (
+  id                uuid primary key default gen_random_uuid(),
+  project_id        uuid not null references public.projects(id) on delete cascade,
+  expense_id        uuid not null references public.expenses(id) on delete cascade,
+  requester_member  uuid not null references public.project_members(id) on delete cascade,
+  requested_by      uuid not null default auth.uid(),
+  note              text,
+  status            text not null default 'pending'
+                    check (status in ('pending','approved','declined','cancelled','superseded')),
+  created_at        timestamptz not null default now(),
+  decided_by        uuid,
+  decided_at        timestamptz
+);
+create index if not exists component_requests_project_idx on public.component_requests(project_id);
+create unique index if not exists component_requests_one_pending
+  on public.component_requests(expense_id, requester_member) where status = 'pending';
+
+create or replace function public.expense_in_project(eid uuid, pid uuid) returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from expenses where id = eid and project_id = pid and deleted_at is null);
+$$;
+
+create or replace function public.has_assignment(eid uuid, mid uuid) returns boolean
+language sql security definer stable set search_path = public as $$
+  select exists (select 1 from component_assignments where expense_id = eid and member_id = mid);
+$$;
+
+-- When an item is assigned (by approval or directly), settle the open requests for it.
+create or replace function public.resolve_requests() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update component_requests
+     set status = case when requester_member = new.member_id then 'approved' else 'superseded' end,
+         decided_by = auth.uid(), decided_at = now()
+   where expense_id = new.expense_id and status = 'pending';
+  return new;
+end $$;
+
+drop trigger if exists resolve_requests on public.component_assignments;
+create trigger resolve_requests after insert or update on public.component_assignments
+  for each row execute function public.resolve_requests();
+
+-- Owner approves or declines a request.
+create or replace function public.decide_request(p_request uuid, p_approve boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare r component_requests;
+begin
+  select * into r from component_requests where id = p_request for update;
+  if not found then raise exception 'Request not found'; end if;
+  if not is_owner(r.project_id) then raise exception 'Only the project owner can decide requests'; end if;
+  if not project_active(r.project_id) then raise exception 'This project is archived'; end if;
+  if r.status <> 'pending' then raise exception 'This request was already decided or withdrawn'; end if;
+  if not expense_in_project(r.expense_id, r.project_id) then raise exception 'That item was deleted'; end if;
+  if p_approve then
+    insert into component_assignments (expense_id, project_id, member_id, assigned_by)
+    values (r.expense_id, r.project_id, r.requester_member, auth.uid())
+    on conflict (expense_id) do update
+      set member_id = excluded.member_id, assigned_by = excluded.assigned_by, assigned_at = now();
+    -- the trigger marks this request approved and any others for the item superseded
+  else
+    update component_requests set status = 'declined', decided_by = auth.uid(), decided_at = now()
+     where id = p_request;
+  end if;
+end $$;
+
+revoke all on function public.decide_request(uuid, boolean) from public, anon;
+grant execute on function public.decide_request(uuid, boolean) to authenticated;
+
+alter table public.component_assignments enable row level security;
+alter table public.component_requests    enable row level security;
+revoke all on public.component_assignments, public.component_requests from anon;
+grant select, insert, update, delete on public.component_assignments to authenticated;
+grant select, insert on public.component_requests to authenticated;
+grant update (status) on public.component_requests to authenticated;   -- only used to withdraw your own request
+
+drop policy if exists assign_select on public.component_assignments;
+create policy assign_select on public.component_assignments for select to authenticated
+  using (is_member(project_id));
+drop policy if exists assign_insert on public.component_assignments;
+create policy assign_insert on public.component_assignments for insert to authenticated
+  with check (is_owner(project_id) and project_active(project_id) and assigned_by = auth.uid()
+              and expense_in_project(expense_id, project_id) and member_in_project(member_id, project_id));
+drop policy if exists assign_update on public.component_assignments;
+create policy assign_update on public.component_assignments for update to authenticated
+  using (is_owner(project_id) and project_active(project_id))
+  with check (is_owner(project_id) and project_active(project_id)
+              and expense_in_project(expense_id, project_id) and member_in_project(member_id, project_id));
+drop policy if exists assign_delete on public.component_assignments;
+create policy assign_delete on public.component_assignments for delete to authenticated
+  using (is_owner(project_id) and project_active(project_id));
+
+drop policy if exists requests_select on public.component_requests;
+create policy requests_select on public.component_requests for select to authenticated
+  using (is_member(project_id));
+drop policy if exists requests_insert on public.component_requests;
+create policy requests_insert on public.component_requests for insert to authenticated
+  with check (is_member(project_id) and project_active(project_id)
+              and requested_by = auth.uid() and status = 'pending'
+              and is_me(requester_member) and member_in_project(requester_member, project_id)
+              and expense_in_project(expense_id, project_id)
+              and not has_assignment(expense_id, requester_member));
+drop policy if exists requests_withdraw on public.component_requests;
+create policy requests_withdraw on public.component_requests for update to authenticated
+  using (requested_by = auth.uid() and status = 'pending' and project_active(project_id))
+  with check (requested_by = auth.uid() and status = 'cancelled');
+
 -- ---------- Receipt photo storage (private bucket) ----------
 
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
@@ -334,4 +458,6 @@ do $$ begin
   begin alter publication supabase_realtime add table public.receipts;        exception when others then null; end;
   begin alter publication supabase_realtime add table public.project_members; exception when others then null; end;
   begin alter publication supabase_realtime add table public.projects;        exception when others then null; end;
+  begin alter publication supabase_realtime add table public.component_assignments; exception when others then null; end;
+  begin alter publication supabase_realtime add table public.component_requests;    exception when others then null; end;
 end $$;

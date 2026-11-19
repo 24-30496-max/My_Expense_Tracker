@@ -1,12 +1,16 @@
-// The searchable list of everything bought.
-import { state, memberName, receiptsOf } from '../store.js';
+// Everything bought: searchable, filterable, shown as a list or as cards.
+import { state, memberName, receiptsOf, holderOf } from '../store.js';
 import { h, select, fmtDate, STATUS_LABEL, debounce } from '../util.js';
 import { expenseTotal, formatMoney } from '../money.js';
 import { isCounted } from '../settlement.js';
 import { openExpenseDialog } from './expense-form.js';
 
+const LAYOUT_KEY = 'bench-ledger:expenses-layout';
+const readLayout = () => { try { return localStorage.getItem(LAYOUT_KEY) === 'cards' ? 'cards' : 'list'; } catch { return 'list'; } };
+const saveLayout = (v) => { try { localStorage.setItem(LAYOUT_KEY, v); } catch { /* private mode: just not remembered */ } };
+
 // Filters survive re-renders (e.g. a live update from a teammate).
-const filters = { q: '', category: '', status: '', payer: '', sort: 'newest', deleted: false };
+const filters = { q: '', category: '', status: '', payer: '', sort: 'newest', deleted: false, layout: readLayout() };
 
 const SORTS = {
   newest: (a, b) => b.purchased_on.localeCompare(a.purchased_on) || b.created_at.localeCompare(a.created_at),
@@ -18,8 +22,54 @@ const SORTS = {
 
 export function renderExpenses(main) {
   const cur = state.project.currency;
-  const listBox = h('div', { class: 'expense-list' });
+  const listBox = h('div');
   const summary = h('p', { class: 'list-summary' });
+  const layoutBtns = h('div', { class: 'seg', role: 'group', 'aria-label': 'Layout' });
+
+  const drawLayoutButtons = () => {
+    layoutBtns.replaceChildren(...[['list', 'List'], ['cards', 'Cards']].map(([key, label]) =>
+      h('button', {
+        type: 'button', class: filters.layout === key ? 'on' : '', 'aria-pressed': filters.layout === key ? 'true' : 'false',
+        onclick: () => { filters.layout = key; saveLayout(key); drawLayoutButtons(); apply(); },
+      }, label)));
+  };
+
+  const listRow = (e) => {
+    const rec = receiptsOf(e.id);
+    const thumbSrc = rec.length ? state.urls[rec[0].thumb_path || rec[0].path] : null;
+    const holder = holderOf(e.id);
+    return h('button', { type: 'button', class: `expense-row${rec.length ? ' has-thumb' : ''}${e.deleted_at ? ' is-deleted' : ''}${e.status === 'needed' ? ' is-planned' : ''}`, onclick: () => openExpenseDialog(e) },
+      rec.length ? h('span', { class: 'thumb' }, thumbSrc ? h('img', { src: thumbSrc, alt: '', loading: 'lazy' }) : null) : null,
+      h('span', { class: 'row-main' },
+        h('span', { class: 'row-name' }, e.name),
+        h('span', { class: 'row-meta' },
+          [fmtDate(e.purchased_on), e.category, `paid by ${memberName(e.paid_by)}`, holder ? `held by ${holder.name}` : null, e.store].filter(Boolean).join(' · '),
+          rec.length ? ` · ${rec.length} receipt${rec.length > 1 ? 's' : ''}` : '')),
+      h('span', { class: 'row-amount' },
+        h('span', { class: 'money' }, formatMoney(expenseTotal(e), cur)),
+        h('span', { class: 'row-sub' },
+          e.qty > 1 ? `${e.qty} × ${formatMoney(e.unit_price_cents, cur)}` : '',
+          h('span', { class: `pill ${e.status}` }, STATUS_LABEL[e.status]))));
+  };
+
+  const card = (e) => {
+    const rec = receiptsOf(e.id);
+    const thumbSrc = rec.length ? state.urls[rec[0].thumb_path || rec[0].path] : null;
+    const holder = holderOf(e.id);
+    return h('button', { type: 'button', class: `expense-card${e.deleted_at ? ' is-deleted' : ''}${e.status === 'needed' ? ' is-planned' : ''}`, onclick: () => openExpenseDialog(e) },
+      thumbSrc ? h('span', { class: 'card-photo' }, h('img', { src: thumbSrc, alt: '', loading: 'lazy' })) : null,
+      h('span', { class: 'card-body' },
+        h('span', { class: 'card-top' },
+          h('span', { class: 'row-name' }, e.name),
+          h('span', { class: `pill ${e.status}` }, STATUS_LABEL[e.status])),
+        h('span', { class: 'card-price money' }, formatMoney(expenseTotal(e), cur)),
+        e.qty > 1 ? h('span', { class: 'row-meta' }, `${e.qty} × ${formatMoney(e.unit_price_cents, cur)}`) : null,
+        h('span', { class: 'card-facts' },
+          h('span', {}, h('span', { class: 'muted' }, 'Paid by '), memberName(e.paid_by)),
+          holder ? h('span', {}, h('span', { class: 'muted' }, 'Held by '), holder.name) : h('span', { class: 'muted' }, 'Not assigned yet'),
+          h('span', { class: 'muted' }, [fmtDate(e.purchased_on), e.category, e.store].filter(Boolean).join(' · ')),
+          rec.length ? h('span', { class: 'muted' }, `${rec.length} receipt${rec.length > 1 ? 's' : ''}`) : null)));
+  };
 
   const apply = () => {
     const q = filters.q.trim().toLowerCase();
@@ -30,6 +80,7 @@ export function renderExpenses(main) {
     if (filters.payer) rows = rows.filter((e) => e.paid_by === filters.payer);
     rows.sort(SORTS[filters.sort]);
 
+    listBox.className = filters.layout === 'cards' ? 'expense-cards' : 'expense-list';
     listBox.replaceChildren();
     if (!rows.length) {
       const none = !state.expenses.some((e) => !e.deleted_at);
@@ -41,28 +92,12 @@ export function renderExpenses(main) {
             h('a', { class: 'btn', href: `#/p/${state.pid}/import` }, 'Import past expenses'))
           : null));
     }
-    for (const e of rows) {
-      const rec = receiptsOf(e.id);
-      const thumbSrc = rec.length ? state.urls[rec[0].thumb_path || rec[0].path] : null;
-      const total = expenseTotal(e);
-      listBox.append(h('button', { type: 'button', class: `expense-row${rec.length ? ' has-thumb' : ''}${e.deleted_at ? ' is-deleted' : ''}${e.status === 'needed' ? ' is-planned' : ''}`, onclick: () => openExpenseDialog(e) },
-        rec.length ? h('span', { class: 'thumb' }, thumbSrc ? h('img', { src: thumbSrc, alt: '', loading: 'lazy' }) : null) : null,
-        h('span', { class: 'row-main' },
-          h('span', { class: 'row-name' }, e.name),
-          h('span', { class: 'row-meta' },
-            [fmtDate(e.purchased_on), e.category, `paid by ${memberName(e.paid_by)}`, e.store].filter(Boolean).join(' · '),
-            rec.length ? ` · ${rec.length} receipt${rec.length > 1 ? 's' : ''}` : '')),
-        h('span', { class: 'row-amount' },
-          h('span', { class: 'money' }, formatMoney(total, cur)),
-          h('span', { class: 'row-sub' },
-            e.qty > 1 ? `${e.qty} × ${formatMoney(e.unit_price_cents, cur)}` : '',
-            h('span', { class: `pill ${e.status}` }, STATUS_LABEL[e.status])))));
-    }
+    for (const e of rows) listBox.append(filters.layout === 'cards' ? card(e) : listRow(e));
     const counted = rows.filter(isCounted);
     summary.textContent = `${rows.length} item${rows.length === 1 ? '' : 's'}${filters.deleted ? ' deleted' : `, ${formatMoney(counted.reduce((s, e) => s + expenseTotal(e), 0), cur)} counted`}`;
   };
 
-  const cats = (state.project.categories || []);
+  const cats = state.project.categories || [];
   const search = h('input', { type: 'search', placeholder: 'Search items, stores, notes', value: filters.q, 'aria-label': 'Search expenses', class: 'grow' });
   search.addEventListener('input', debounce(() => { filters.q = search.value; apply(); }, 120));
   const bind = (el, key) => { el.addEventListener('change', () => { filters[key] = el.value; apply(); }); return el; };
@@ -77,8 +112,9 @@ export function renderExpenses(main) {
       h('label', { class: 'check' },
         h('input', { type: 'checkbox', checked: filters.deleted, onchange: (ev) => { filters.deleted = ev.target.checked; apply(); } }),
         'Show deleted')),
-    summary,
+    h('div', { class: 'summary-bar' }, summary, layoutBtns),
     listBox,
   );
+  drawLayoutButtons();
   apply();
 }

@@ -4,7 +4,7 @@ import { state, refreshProject, isOwner, isActive, ownerName } from '../store.js
 import { h, field, toast, confirmBox, download, toCsv, today } from '../util.js';
 import { toCents, centsToPlain, expenseTotal } from '../money.js';
 import { computeBalances, isCounted, splitEqual } from '../settlement.js';
-import { receiptsOf } from '../store.js';
+import { receiptsOf, holderOf } from '../store.js';
 
 function buildExport() {
   const { members, expenses, payments, project } = state;
@@ -14,14 +14,14 @@ function buildExport() {
   const live = expenses.filter((e) => !e.deleted_at).sort((a, b) => a.purchased_on.localeCompare(b.purchased_on));
 
   const expRows = [[
-    'Date', 'Item', 'Category', 'Qty', 'Unit price', 'Extra fees', 'Total', 'Paid by', 'Store', 'Link', 'Status', 'Notes', 'Receipts',
+    'Date', 'Item', 'Category', 'Qty', 'Unit price', 'Extra fees', 'Total', 'Paid by', 'Store', 'Link', 'Status', 'Held by', 'Notes', 'Receipts',
     ...members.map((m) => `${m.name} share`),
   ]];
   for (const e of live) {
     const total = expenseTotal(e);
     const shares = isCounted(e) ? splitEqual(total, ids, e.id) : {};
     expRows.push([e.purchased_on, e.name, e.category || '', e.qty, money(e.unit_price_cents), money(e.fees_cents), money(total),
-      name(e.paid_by), e.store || '', e.link || '', e.status, e.notes || '', receiptsOf(e.id).length,
+      name(e.paid_by), e.store || '', e.link || '', e.status, (holderOf(e.id) || {}).name || '', e.notes || '', receiptsOf(e.id).length,
       ...ids.map((id) => (isCounted(e) ? money(shares[id]) : '0.00'))]);
   }
   const { rows, totalSpent } = computeBalances({ members, expenses, payments });
@@ -65,6 +65,13 @@ export function renderProject(main) {
       h('button', { class: 'btn primary', onclick: exportXlsx }, 'Download Excel (.xlsx)'),
       h('button', { class: 'btn', onclick: exportCsv }, 'Download CSV'))));
 
+  if (isActive()) {
+    main.append(h('section', { class: 'panel' },
+      h('h2', {}, 'Import past expenses'),
+      h('p', { class: 'muted' }, 'Bring in expenses you already tracked in a spreadsheet (CSV or Excel).'),
+      h('a', { class: 'btn', href: `#/p/${state.pid}/import` }, 'Import from a file')));
+  }
+
   // ----- settings -----
   const name = h('input', { type: 'text', value: project.name, disabled: !owner, required: true });
   const budget = h('input', { type: 'text', inputMode: 'decimal', value: project.budget_cents ? centsToPlain(project.budget_cents) : '', placeholder: 'No budget', disabled: !owner });
@@ -96,35 +103,48 @@ export function renderProject(main) {
 
   // ----- members -----
   const memberList = h('ul', { class: 'member-list' }, members.map((mb) => {
-    const nameIn = h('input', { type: 'text', value: mb.name, disabled: !owner, 'aria-label': `Name for ${mb.email}` });
-    return h('li', {},
+    const nameIn = h('input', { type: 'text', value: mb.name, disabled: !owner, 'aria-label': `Name for ${mb.email || mb.name}` });
+    const temporary = !mb.email;
+    const emailIn = temporary && owner ? h('input', { type: 'email', placeholder: 'Their email', 'aria-label': `Email for ${mb.name}` }) : null;
+    return h('li', { 'data-member': mb.name },
       h('div', { class: 'member-main' }, nameIn,
-        h('span', { class: 'muted' }, mb.email),
-        h('span', { class: `pill ${mb.user_id ? 'received' : 'needed'}` }, mb.user_id ? 'Signed in' : 'Not signed in yet')),
+        temporary ? h('span', { class: 'muted' }, 'No email yet') : h('span', { class: 'muted' }, mb.email),
+        temporary
+          ? h('span', { class: 'pill needed' }, 'Temporary')
+          : h('span', { class: `pill ${mb.user_id ? 'received' : 'ordered'}` }, mb.user_id ? 'Signed in' : 'Not signed in yet'),
+        emailIn),
       owner ? h('div', { class: 'member-actions' },
+        emailIn ? h('button', { class: 'btn small primary', onclick: async () => {
+          const addr = emailIn.value.trim();
+          if (!/^\S+@\S+\.\S+$/.test(addr)) { toast('Enter a valid email for ' + mb.name + '.', 'error'); return; }
+          if (!(await confirmBox(`Give ${mb.name} the email ${addr}? When they sign in with it they will be linked to ${mb.name}, with all of ${mb.name}'s expenses and items. An email can be assigned only once.`, 'Assign email'))) return;
+          try { await api.setMemberEmail(mb.id, addr); await refreshProject(); toast(`${mb.name} can now sign in with ${addr}`); } catch (err) { toast(err.message, 'error'); }
+        } }, 'Assign email') : null,
         h('button', { class: 'btn small', onclick: async () => {
           if (!nameIn.value.trim()) return;
           try { await api.renameMember(mb.id, nameIn.value.trim()); await refreshProject(); toast('Name saved'); } catch (err) { toast(err.message, 'error'); }
         } }, 'Save name'),
         mb.user_id !== state.user.id ? h('button', { class: 'btn small danger-quiet', onclick: async () => {
-          if (!(await confirmBox(`Remove ${mb.name} from this project?`, 'Remove', true))) return;
+          if (!(await confirmBox(`Remove ${mb.name} from this project? Anything assigned to them becomes unassigned.`, 'Remove', true))) return;
           try { await api.removeMember(mb.id); await refreshProject(); toast('Member removed'); } catch (err) { toast(err.message, 'error'); }
         } }, 'Remove') : null) : null);
   }));
 
   const newName = h('input', { type: 'text', placeholder: 'Name' });
-  const newEmail = h('input', { type: 'email', placeholder: 'Email they sign in with' });
+  const newEmail = h('input', { type: 'email', placeholder: 'Email (optional, add it later)' });
   const addForm = h('form', { class: 'row-add', novalidate: true }, newName, newEmail, h('button', { class: 'btn', type: 'submit' }, 'Add member'));
   addForm.addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    if (!newName.value.trim() || !/^\S+@\S+\.\S+$/.test(newEmail.value.trim())) { toast('Enter a name and a valid email.', 'error'); return; }
+    const addr = newEmail.value.trim();
+    if (!newName.value.trim()) { toast('Enter a name.', 'error'); return; }
+    if (addr && !/^\S+@\S+\.\S+$/.test(addr)) { toast('That email does not look right. Leave it empty to add it later.', 'error'); return; }
     if (state.expenses.some((e) => !e.deleted_at)
       && !(await confirmBox(`Adding a member splits every existing expense ${members.length + 1} ways instead of ${members.length}, so everyone's fair share changes. Continue?`, 'Add member'))) return;
     try {
-      await api.addMember(state.pid, newName.value.trim(), newEmail.value.trim());
+      await api.addMember(state.pid, newName.value.trim(), addr);
       newName.value = ''; newEmail.value = '';
       await refreshProject();
-      toast('Member added');
+      toast(addr ? 'Member added' : 'Temporary member added. Assign their email when you have it.');
     } catch (err) { toast(err.message, 'error'); }
   });
 
@@ -132,6 +152,7 @@ export function renderProject(main) {
     h('h2', {}, `Members (${members.length})`),
     memberList,
     owner && isActive() ? addForm : null,
+    h('p', { class: 'muted' }, 'A member added by name only is temporary: you can record expenses for them and assign items to them right away. When you add their email, the first time they sign in with it they are linked to that name.'),
     h('p', { class: 'muted' }, `Everyone signs in at ${location.origin}${location.pathname} with the email listed above. Expenses are always split equally between all members.`)));
 
   // ----- archive -----

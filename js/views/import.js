@@ -53,7 +53,9 @@ function chooseSheet(name) {
 
 export function renderImport(main) {
   if (!isActive()) { main.append(h('section', { class: 'panel' }, h('p', {}, 'This project is archived, so nothing can be imported.'))); return; }
-  const redraw = () => { main.replaceChildren(); draw(); };
+  const back = () => h('p', {}, h('a', { href: `#/p/${state.pid}/project` }, '\u2190 Back to Project'));
+  const redraw = () => { main.replaceChildren(back()); draw(); };
+  main.append(back());
   const cur = state.project.currency;
 
   function draw() {

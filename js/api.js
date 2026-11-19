@@ -51,14 +51,16 @@ export const claim = () => ok(sb.rpc('claim_memberships'));
 export const listProjects = () => ok(sb.from('projects').select('*').order('created_at', { ascending: false }));
 
 export async function loadProject(pid) {
-  const [project, members, expenses, payments, receipts] = await Promise.all([
+  const [project, members, expenses, payments, receipts, assignments, requests] = await Promise.all([
     ok(sb.from('projects').select('*').eq('id', pid).maybeSingle()),
     ok(sb.from('project_members').select('*').eq('project_id', pid).order('created_at').order('name')),
     ok(sb.from('expenses').select('*').eq('project_id', pid).order('purchased_on', { ascending: false })),
     ok(sb.from('payments').select('*').eq('project_id', pid).order('paid_on', { ascending: false })),
     ok(sb.from('receipts').select('*').eq('project_id', pid)),
+    ok(sb.from('component_assignments').select('*').eq('project_id', pid)),
+    ok(sb.from('component_requests').select('*').eq('project_id', pid).order('created_at', { ascending: false })),
   ]);
-  return { project, members, expenses, payments, receipts };
+  return { project, members, expenses, payments, receipts, assignments, requests };
 }
 
 export const createProject = (name, currency, budgetCents, members) =>
@@ -67,8 +69,10 @@ export const createProject = (name, currency, budgetCents, members) =>
 export const updateProject = (id, patch) => ok(sb.from('projects').update(patch).eq('id', id));
 
 // ---------- members ----------
+/** email is optional: a member with no email is a temporary member until the owner assigns one. */
 export const addMember = (projectId, name, email) =>
-  ok(sb.from('project_members').insert({ project_id: projectId, name, email: email.toLowerCase() }));
+  ok(sb.from('project_members').insert({ project_id: projectId, name, email: email ? email.toLowerCase() : null }));
+export const setMemberEmail = (id, email) => ok(sb.from('project_members').update({ email: email.toLowerCase() }).eq('id', id));
 export const renameMember = (id, name) => ok(sb.from('project_members').update({ name }).eq('id', id));
 export const removeMember = (id) => ok(sb.from('project_members').delete().eq('id', id));
 
@@ -113,10 +117,25 @@ export async function signedUrls(paths) {
 export const insertPayment = (row) => ok(sb.from('payments').insert(row));
 export const undoPayment = (id) => ok(sb.from('payments').update({ deleted_at: new Date().toISOString() }).eq('id', id));
 
+// ---------- component owners and requests ----------
+export const assignComponent = (projectId, expenseId, memberId, userId) =>
+  ok(sb.from('component_assignments').upsert(
+    { expense_id: expenseId, project_id: projectId, member_id: memberId, assigned_by: userId, assigned_at: new Date().toISOString() },
+    { onConflict: 'expense_id' }));
+export const unassignComponent = (expenseId) => ok(sb.from('component_assignments').delete().eq('expense_id', expenseId));
+export const requestComponent = async (row) => {
+  try { await ok(sb.from('component_requests').insert(row)); } catch (err) {
+    if (/already exists/i.test(err.message)) throw new Error('You already have a pending request for this item.');
+    throw err;
+  }
+};
+export const withdrawRequest = (id) => ok(sb.from('component_requests').update({ status: 'cancelled' }).eq('id', id));
+export const decideRequest = (id, approve) => ok(sb.rpc('decide_request', { p_request: id, p_approve: approve }));
+
 // ---------- live updates ----------
 export function subscribe(pid, onChange) {
   const ch = sb.channel(`project-${pid}`);
-  for (const table of ['expenses', 'payments', 'receipts', 'project_members']) {
+  for (const table of ['expenses', 'payments', 'receipts', 'project_members', 'component_assignments', 'component_requests']) {
     ch.on('postgres_changes', { event: '*', schema: 'public', table, filter: `project_id=eq.${pid}` }, onChange);
   }
   ch.on('postgres_changes', { event: '*', schema: 'public', table: 'projects', filter: `id=eq.${pid}` }, onChange);
