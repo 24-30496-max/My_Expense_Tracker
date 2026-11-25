@@ -14,14 +14,14 @@ function buildExport() {
   const live = expenses.filter((e) => !e.deleted_at).sort((a, b) => a.purchased_on.localeCompare(b.purchased_on));
 
   const expRows = [[
-    'Date', 'Item', 'Category', 'Qty', 'Unit price', 'Extra fees', 'Total', 'Paid by', 'Store', 'Link', 'Status', 'Held by', 'Notes', 'Receipts',
+    'Date', 'Item', 'Category', 'Qty', 'Unit price', 'Extra fees', 'Total', 'Paid by', 'Store', 'Link', 'Status', 'Held by', 'Notes', 'Receipts', 'Receipt total',
     ...members.map((m) => `${m.name} share`),
   ]];
   for (const e of live) {
     const total = expenseTotal(e);
     const shares = isCounted(e) ? splitEqual(total, ids, e.id) : {};
     expRows.push([e.purchased_on, e.name, e.category || '', e.qty, money(e.unit_price_cents), money(e.fees_cents), money(total),
-      name(e.paid_by), e.store || '', e.link || '', e.status, (holderOf(e.id) || {}).name || '', e.notes || '', receiptsOf(e.id).length,
+      name(e.paid_by), e.store || '', e.link || '', e.status, (holderOf(e.id) || {}).name || '', e.notes || '', receiptsOf(e.id).length, e.batch_total_cents != null ? money(e.batch_total_cents) : '',
       ...ids.map((id) => (isCounted(e) ? money(shares[id]) : '0.00'))]);
   }
   const { rows, totalSpent } = computeBalances({ members, expenses, payments });

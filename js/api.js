@@ -100,8 +100,21 @@ export async function uploadReceipt(projectId, expenseId, { full, thumb }) {
   await ok(sb.from('receipts').insert({ expense_id: expenseId, project_id: projectId, path, thumb_path: thumbPath }));
 }
 
-export async function deleteReceipt(rec) {
-  await ok(bucket().remove([rec.path, rec.thumb_path].filter(Boolean))); // file first, then the row
+/** One photo for a whole receipt: upload once, then link it to every item bought on that receipt. */
+export async function attachSharedReceipt(projectId, expenseIds, { full, thumb }) {
+  const base = `${projectId}/${expenseIds[0]}/${crypto.randomUUID()}`;
+  const path = `${base}.jpg`;
+  const thumbPath = `${base}_t.jpg`;
+  const opts = { contentType: 'image/jpeg', upsert: false };
+  await ok(bucket().upload(path, full, opts));
+  await ok(bucket().upload(thumbPath, thumb, opts));
+  await ok(sb.from('receipts').insert(expenseIds.map((id) => ({ expense_id: id, project_id: projectId, path, thumb_path: thumbPath }))));
+}
+
+/** `all` = every receipt row of the project: a file shared with other items is kept until the last one is removed. */
+export async function deleteReceipt(rec, all = []) {
+  const stillUsed = all.some((r) => r.id !== rec.id && r.path === rec.path);
+  if (!stillUsed) await ok(bucket().remove([rec.path, rec.thumb_path].filter(Boolean))); // file first, then the row
   await ok(sb.from('receipts').delete().eq('id', rec.id));
 }
 

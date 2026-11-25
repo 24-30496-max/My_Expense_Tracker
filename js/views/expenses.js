@@ -4,6 +4,7 @@ import { h, select, fmtDate, STATUS_LABEL, debounce } from '../util.js';
 import { expenseTotal, formatMoney } from '../money.js';
 import { isCounted } from '../settlement.js';
 import { openExpenseDialog } from './expense-form.js';
+import { openBatchDialog } from './batch-form.js';
 
 const LAYOUT_KEY = 'bench-ledger:expenses-layout';
 const readLayout = () => { try { return localStorage.getItem(LAYOUT_KEY) === 'cards' ? 'cards' : 'list'; } catch { return 'list'; } };
@@ -25,6 +26,9 @@ export function renderExpenses(main) {
   const listBox = h('div');
   const summary = h('p', { class: 'list-summary' });
   const layoutBtns = h('div', { class: 'seg', role: 'group', 'aria-label': 'Layout' });
+  const batchSize = new Map();
+  for (const x of state.expenses) if (x.batch_id && !x.deleted_at) batchSize.set(x.batch_id, (batchSize.get(x.batch_id) || 0) + 1);
+  const batchNote = (e) => (e.batch_id && batchSize.get(e.batch_id) > 1 ? `receipt of ${batchSize.get(e.batch_id)} items` : null);
 
   const drawLayoutButtons = () => {
     layoutBtns.replaceChildren(...[['list', 'List'], ['cards', 'Cards']].map(([key, label]) =>
@@ -43,7 +47,7 @@ export function renderExpenses(main) {
       h('span', { class: 'row-main' },
         h('span', { class: 'row-name' }, e.name),
         h('span', { class: 'row-meta' },
-          [fmtDate(e.purchased_on), e.category, `paid by ${memberName(e.paid_by)}`, holder ? `held by ${holder.name}` : null, e.store].filter(Boolean).join(' · '),
+          [fmtDate(e.purchased_on), e.category, `paid by ${memberName(e.paid_by)}`, holder ? `held by ${holder.name}` : null, batchNote(e), e.store].filter(Boolean).join(' · '),
           rec.length ? ` · ${rec.length} receipt${rec.length > 1 ? 's' : ''}` : '')),
       h('span', { class: 'row-amount' },
         h('span', { class: 'money' }, formatMoney(expenseTotal(e), cur)),
@@ -67,7 +71,7 @@ export function renderExpenses(main) {
         h('span', { class: 'card-facts' },
           h('span', {}, h('span', { class: 'muted' }, 'Paid by '), memberName(e.paid_by)),
           holder ? h('span', {}, h('span', { class: 'muted' }, 'Held by '), holder.name) : h('span', { class: 'muted' }, 'Not assigned yet'),
-          h('span', { class: 'muted' }, [fmtDate(e.purchased_on), e.category, e.store].filter(Boolean).join(' · ')),
+          h('span', { class: 'muted' }, [fmtDate(e.purchased_on), e.category, batchNote(e), e.store].filter(Boolean).join(' · ')),
           rec.length ? h('span', { class: 'muted' }, `${rec.length} receipt${rec.length > 1 ? 's' : ''}`) : null)));
   };
 
@@ -89,6 +93,7 @@ export function renderExpenses(main) {
         none && !filters.deleted && state.project.status === 'active'
           ? h('div', { class: 'empty-actions' },
             h('button', { class: 'btn primary', onclick: () => openExpenseDialog(null) }, 'Add the first expense'),
+            h('button', { class: 'btn', onclick: () => openBatchDialog() }, 'Add a whole receipt'),
             h('a', { class: 'btn', href: `#/p/${state.pid}/import` }, 'Import past expenses'))
           : null));
     }
@@ -112,7 +117,9 @@ export function renderExpenses(main) {
       h('label', { class: 'check' },
         h('input', { type: 'checkbox', checked: filters.deleted, onchange: (ev) => { filters.deleted = ev.target.checked; apply(); } }),
         'Show deleted')),
-    h('div', { class: 'summary-bar' }, summary, layoutBtns),
+    h('div', { class: 'summary-bar' }, summary,
+      h('div', { class: 'bar-actions' },
+        state.project.status === 'active' ? h('button', { class: 'btn small', onclick: () => openBatchDialog() }, 'Add receipt') : null, layoutBtns)),
     listBox,
   );
   drawLayoutButtons();

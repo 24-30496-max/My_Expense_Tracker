@@ -5,6 +5,7 @@ import { h, select, field, modal, today, toast, confirmBox, fmtDateTime, STATUS_
 import { toCents, centsToPlain, formatMoney, expenseTotal } from '../money.js';
 import { splitEqual } from '../settlement.js';
 import { prepareReceipt } from '../image.js';
+import { openBatchDialog, modeSwitch } from './batch-form.js';
 
 const FIELD_LABEL = {
   name: 'item', category: 'category', qty: 'quantity', unit_price_cents: 'price', fees_cents: 'fees',
@@ -116,6 +117,14 @@ export function openExpenseDialog(expense = null) {
   const gallery = h('input', { type: 'file', accept: 'image/*', multiple: true, class: 'visually-hidden', tabIndex: -1, onchange: (ev) => addFiles(ev.target) });
   drawReceipts();
 
+  // ----- same receipt -----
+  const siblings = !isNew && expense.batch_id ? state.expenses.filter((x) => x.batch_id === expense.batch_id && !x.deleted_at) : [];
+  const sharedPhotos = existingReceipts.some((r) => state.receipts.some((o) => o.path === r.path && o.expense_id !== r.expense_id));
+  const batchPanel = siblings.length > 1 ? h('details', { class: 'batch-info' },
+    h('summary', {}, `Bought on one receipt with ${siblings.length - 1} other item${siblings.length === 2 ? '' : 's'}`),
+    h('p', { class: 'muted' }, `Receipt total ${formatMoney(expense.batch_total_cents ?? siblings.reduce((s, x) => s + expenseTotal(x), 0), cur)}. Shipping, tax or discounts on the receipt are already included in each item's cost.`),
+    h('ul', { class: 'history-list' }, siblings.map((x) => h('li', {}, `${x.name}: ${formatMoney(expenseTotal(x), cur)}${x.id === expense.id ? ' (this item)' : ''}`)))) : null;
+
   // ----- history -----
   const historyBox = h('details', { class: 'history' }, h('summary', {}, 'Edit history'));
   const addedBy = !isNew && memberByUser(e.created_by);
@@ -140,10 +149,11 @@ export function openExpenseDialog(expense = null) {
   const msg = h('p', { class: 'form-msg', role: 'alert' });
   const saveBtn = h('button', { class: 'btn primary', type: 'submit' }, isNew ? 'Add expense' : 'Save changes');
   const form = h('form', { class: 'form-grid', novalidate: true },
+    isNew && isActive() ? modeSwitch('single', () => { m.close(); openBatchDialog(); }) : null,
     field('Item', f.name),
     h('div', { class: 'row2' }, field('Category', f.category), field('Status', f.status,
       'Needed items are planned and not counted in spending yet.')),
-    h('div', { class: 'row3' }, field('Qty', f.qty), field(`Unit price (${cur})`, f.price), field('Extra fees', f.fees, 'Shipping, tax')),
+    h('div', { class: 'row3' }, field('Qty', f.qty), field(`Unit price (${cur})`, f.price), field('Extra fees', f.fees, 'Shipping, tax. A minus is a discount.')),
     h('div', { class: 'total-row' }, h('span', {}, 'Total'), totalOut),
     splitOut,
     isNew ? null : h('p', { class: 'split-line' }, holderOf(expense.id) ? `Held by ${holderOf(expense.id).name}. ` : 'Not assigned to anyone yet. ', h('a', { href: `#/p/${state.pid}/owners`, onclick: () => document.querySelector('dialog')?.close() }, 'See Owners')),
@@ -153,10 +163,12 @@ export function openExpenseDialog(expense = null) {
     (!editable && !existingReceipts.length) ? null : h('fieldset', { class: 'receipts' },
       h('legend', {}, 'Receipt photos'),
       receiptBox,
+      sharedPhotos ? h('p', { class: 'muted small' }, 'These photos are shared by all items from the same receipt. Removing one here removes it from this item only.') : null,
       editable ? h('div', { class: 'receipt-actions' },
         h('button', { type: 'button', class: 'btn', onclick: () => camera.click() }, 'Take photo'),
         h('button', { type: 'button', class: 'btn', onclick: () => gallery.click() }, 'Add photos'),
         camera, gallery) : null),
+    batchPanel,
     isNew ? null : historyBox,
     msg,
     h('div', { class: 'actions' },
@@ -193,7 +205,8 @@ export function openExpenseDialog(expense = null) {
     const { q, unit, fees } = readCents();
     if (!f.name.value.trim()) { msg.textContent = 'Enter the item name.'; f.name.focus(); return; }
     if (Number.isNaN(unit) || unit < 0) { msg.textContent = 'Enter a valid unit price, for example 599 or 599.50.'; f.price.focus(); return; }
-    if (Number.isNaN(fees) || fees < 0) { msg.textContent = 'Extra fees must be a number, or empty.'; f.fees.focus(); return; }
+    if (Number.isNaN(fees)) { msg.textContent = 'Extra fees must be a number, or empty.'; f.fees.focus(); return; }
+    if (q * unit + fees < 0) { msg.textContent = 'The discount is bigger than the price, so the total would be below zero.'; f.fees.focus(); return; }
     if (!f.date.value) { msg.textContent = 'Pick the purchase date.'; return; }
     const row = {
       name: f.name.value.trim(), category: f.category.value || null, qty: q, unit_price_cents: unit, fees_cents: fees,
@@ -214,7 +227,7 @@ export function openExpenseDialog(expense = null) {
       let failed = 0;
       let lastErr = '';
       for (const rec of existingReceipts.filter((x) => removedReceipts.has(x.id))) {
-        try { await api.deleteReceipt(rec); } catch (err) { failed++; lastErr = err.message; }
+        try { await api.deleteReceipt(rec, state.receipts); } catch (err) { failed++; lastErr = err.message; }
       }
       for (const file of queued) {
         try { await api.uploadReceipt(project.id, id, await prepareReceipt(file)); } catch (err) { failed++; lastErr = err.message; }

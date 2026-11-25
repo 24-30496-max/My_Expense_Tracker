@@ -39,7 +39,7 @@ create table if not exists public.expenses (
   category         text,
   qty              integer not null default 1 check (qty >= 1),
   unit_price_cents bigint  not null default 0 check (unit_price_cents >= 0),
-  fees_cents       bigint  not null default 0 check (fees_cents >= 0),
+  fees_cents       bigint  not null default 0,   -- shipping/tax, or a negative number for a discount
   purchased_on     date    not null default current_date,
   paid_by          uuid    not null references public.project_members(id),
   store            text,
@@ -54,6 +54,20 @@ create table if not exists public.expenses (
   deleted_by       uuid
 );
 create index if not exists expenses_project_idx on public.expenses(project_id);
+
+-- Receipt batches: several items bought on one receipt share a batch_id.
+-- batch_total_cents is the whole receipt's total (the items' costs add up to exactly this).
+alter table public.expenses add column if not exists batch_id uuid;
+alter table public.expenses add column if not exists batch_total_cents bigint;
+create index if not exists expenses_batch_idx on public.expenses(batch_id) where batch_id is not null;
+
+-- Fees may now be negative (a discount spread over the items), as long as an item never costs less than zero.
+alter table public.expenses drop constraint if exists expenses_fees_cents_check;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'expenses_total_nonneg') then
+    alter table public.expenses add constraint expenses_total_nonneg check (qty * unit_price_cents + fees_cents >= 0);
+  end if;
+end $$;
 
 create table if not exists public.expense_history (
   id          bigint generated always as identity primary key,

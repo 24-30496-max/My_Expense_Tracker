@@ -21,6 +21,8 @@ Rules worth knowing:
 - Deleting is a soft delete ("Show deleted" lets you restore). Every edit is recorded in the expense's history.
 - Items with status **Needed** are planned purchases: they show up in the list but are not counted in spending or splits until you change them to Ordered, Received or Used.
 - Only the project creator manages members, budget, categories and archiving.
+- **Whole receipts:** when one receipt covers many components, use **Add expense > Whole receipt** (or **Add receipt** on the Expenses tab). Enter the date, who paid and the store once, list the items (you can paste a list, one item per line: `Jumper wires x3 45` means 3 pieces at 45 each), and type the receipt total. If the total is higher than the items (shipping, tax) or lower (a discount), the difference is spread across the items in proportion to their prices, so each item carries its fair share and the items add up to exactly the receipt total. One photo is shared by all items on the receipt.
+- **Discounts on a single item:** put a minus sign in Extra fees (for example `-50`). The item's total can never go below zero.
 - **Temporary members:** add a member by name only (no email). You can record expenses for them and assign items to them straight away. When you have their email, open Project > Members and tap **Assign email**; the first time they sign in with it they are linked to that name and everything under it. An email can be assigned once.
 - **Component owners:** "owner" means who holds or keeps the item, which can differ from who paid. The creator assigns items on the Owners tab. Any member can request an item they do not hold (with a note); the creator sees a badge on the Owners tab and approves or declines. Approving assigns the item and closes other open requests for it.
 
@@ -101,6 +103,7 @@ js/api.js             all Supabase calls
 js/store.js           shared state
 js/settlement.js      equal split, balances, fewest payments (integer centavos)
 js/importer.js        spreadsheet to expenses
+js/batch.js           spreading a receipt total across its items, parsing pasted lists
 js/money.js, image.js, util.js
 js/views/             one file per screen (expenses, owners, settle, import, project, ...)
 supabase/schema.sql   tables, security rules, receipt storage
