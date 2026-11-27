@@ -1,7 +1,7 @@
 // App shell: sign-in state, routing, header and tabs.
 import { isConfigured } from './config.js';
 import * as api from './api.js';
-import { state, onState, setUser, openProject, closeProject, refreshProjects, isActive, isOwner, pendingRequests } from './store.js';
+import { state, onState, setUser, openProject, closeProject, refreshProjects, isActive, isOwner, pendingRequests, answersNeeded } from './store.js';
 import { h, $, toast, debounce } from './util.js';
 import { renderLogin } from './views/login.js';
 import { renderProjects, renderNewProject } from './views/projects.js';
@@ -46,10 +46,13 @@ function shell(route) {
     h('span', { class: 'who muted' }, state.user.email),
     h('button', { class: 'btn small', onclick: () => api.auth.signOut() }, 'Sign out'));
   const needsReview = inProject && isOwner() ? pendingRequests().length : 0;
+  const needsAnswer = inProject ? answersNeeded() : 0;
   const activeTab = route.tab === 'import' ? 'project' : route.tab; // Import lives under Project
   const nav = inProject ? h('nav', { class: 'tabs', 'aria-label': 'Sections' }, TABS.map(([key, label]) =>
     h('a', { href: `#/p/${state.pid}/${key}`, class: activeTab === key ? 'on' : '', 'aria-current': activeTab === key ? 'page' : null },
-      label, key === 'owners' && needsReview ? h('span', { class: 'badge', 'aria-label': `${needsReview} requests to review` }, needsReview) : null))) : null;
+      label,
+      key === 'owners' && needsReview ? h('span', { class: 'badge', 'aria-label': `${needsReview} requests to review` }, needsReview) : null,
+      key === 'overview' && needsAnswer ? h('span', { class: 'badge', 'aria-label': `${needsAnswer} waiting for your OK` }, needsAnswer) : null))) : null;
   const main = h('main', { id: 'view', class: 'view' });
   const fab = inProject && isActive() && ['overview', 'expenses'].includes(route.tab)
     ? h('button', { class: 'fab', onclick: () => openExpenseDialog(null), 'aria-label': 'Add expense' }, h('span', { 'aria-hidden': 'true' }, '+'), ' Add expense')

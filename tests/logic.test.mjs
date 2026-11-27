@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { toCents, expenseTotal } from '../js/money.js';
-import { splitEqual, computeBalances, suggestSettlements } from '../js/settlement.js';
+import { splitEqual, computeBalances, suggestSettlements, isPaymentCounted } from '../js/settlement.js';
 
 const M = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
 const sum = (o) => Object.values(o).reduce((x, y) => x + y, 0);
@@ -83,4 +83,20 @@ test('a payment reduces what is owed, and undoing (deleted) restores it', () => 
 
 test('expenseTotal = qty x unit + fees', () => {
   assert.equal(expenseTotal({ qty: 3, unit_price_cents: 1000, fees_cents: 250 }), 3250);
+});
+
+test('only confirmed or directly recorded payments count; waiting, declined, cancelled and undone do not', () => {
+  const expenses = [{ id: 'e1', qty: 1, unit_price_cents: 30000, fees_cents: 0, paid_by: 'a', status: 'received', deleted_at: null }];
+  const base = { from_member: 'b', to_member: 'a', amount_cents: 5000, deleted_at: null };
+  const bal = (payments) => computeBalances({ members: M, expenses, payments }).rows.b.balance;
+  const start = bal([]);
+  assert.equal(start, -10000);
+  assert.equal(bal([{ ...base }]), -5000, 'old rows without a status count (recorded directly)');
+  assert.equal(bal([{ ...base, status: 'confirmed', proposed_by: 'b' }]), -5000, 'confirmed agreement counts');
+  for (const status of ['pending', 'declined', 'cancelled', 'undone']) {
+    assert.equal(bal([{ ...base, status }]), start, `${status} does not change balances`);
+  }
+  assert.equal(bal([{ ...base, status: 'confirmed', deleted_at: '2026-11-27T00:00:00Z' }]), start, 'undone (deleted) does not count');
+  assert.equal(isPaymentCounted({ status: 'pending', deleted_at: null }), false);
+  assert.equal(isPaymentCounted({ deleted_at: null }), true);
 });

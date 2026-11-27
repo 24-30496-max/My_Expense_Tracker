@@ -4,6 +4,7 @@ import { h, fmtDate } from '../util.js';
 import { expenseTotal, formatMoney } from '../money.js';
 import { computeBalances, isCounted } from '../settlement.js';
 import { openExpenseDialog } from './expense-form.js';
+import { waitingPanel } from './agreements.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const svg = (tag, attrs = {}, ...kids) => {
@@ -143,6 +144,8 @@ export function renderOverview(main) {
       })))),
     h('p', { class: 'muted' }, h('a', { href: `#/p/${state.pid}/settle` }, 'Go to Settle up'), ' to record who pays whom.'));
 
+  const waiting = waitingPanel({ mine: true });
+  if (waiting) main.append(waiting);
   main.append(head);
   if (!counted.length) {
     main.append(h('section', { class: 'panel empty' },

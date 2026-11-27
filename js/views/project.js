@@ -25,14 +25,15 @@ function buildExport() {
       ...ids.map((id) => (isCounted(e) ? money(shares[id]) : '0.00'))]);
   }
   const { rows, totalSpent } = computeBalances({ members, expenses, payments });
-  const balRows = [['Member', 'Paid', 'Fair share', 'Payments sent', 'Payments received', 'Balance (positive = is owed)']];
+  const balRows = [['Member', 'Paid', 'Fair share', 'Payments sent (confirmed)', 'Payments received (confirmed)', 'Balance (positive = is owed)']];
   members.forEach((m) => {
     const r = rows[m.id];
     balRows.push([m.name, money(r.paid), money(r.share), money(r.sent), money(r.received), money(r.balance)]);
   });
   balRows.push(['Total spent', money(totalSpent)]);
-  const payRows = [['Date', 'From', 'To', 'Amount', 'Note']];
-  payments.filter((p) => !p.deleted_at).forEach((p) => payRows.push([p.paid_on, name(p.from_member), name(p.to_member), money(p.amount_cents), p.note || '']));
+  const payRows = [['Date', 'From', 'To', 'Amount', 'Note', 'Status']];
+  const payStatus = (p) => (p.deleted_at && p.status === 'confirmed' ? 'Undone' : { pending: 'Waiting for confirmation', confirmed: p.proposed_by ? 'Confirmed' : 'Recorded directly', declined: 'Declined', cancelled: 'Cancelled', undone: 'Undone' }[p.status || 'confirmed']);
+  payments.slice().sort((a, b) => a.paid_on.localeCompare(b.paid_on)).forEach((p) => payRows.push([p.paid_on, name(p.from_member), name(p.to_member), money(p.amount_cents), p.note || '', payStatus(p)]));
   const base = `${project.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'project'}-${today()}`;
   return { expRows, balRows, payRows, base };
 }
@@ -60,7 +61,7 @@ export function renderProject(main) {
 
   main.append(h('section', { class: 'panel' },
     h('h2', {}, 'Export'),
-    h('p', { class: 'muted' }, 'Expenses, who owes whom, and payments, for your report or records.'),
+    h('p', { class: 'muted' }, 'Expenses, who owes whom, and payments and agreements (with their status), for your report or records. Only confirmed payments count in the totals.'),
     h('div', { class: 'actions left' },
       h('button', { class: 'btn primary', onclick: exportXlsx }, 'Download Excel (.xlsx)'),
       h('button', { class: 'btn', onclick: exportCsv }, 'Download CSV'))));

@@ -10,10 +10,10 @@ A shared expense tracker for group projects. Log what you buy (with receipt phot
 
 | Tab | What it does |
 |---|---|
-| Overview | Total spent, budget left, who paid what, spending by category and over time |
+| Overview | Total spent, budget left, who paid what, spending by category and over time. Shows a box at the top when an agreement is waiting for your OK |
 | Expenses | Search and filter everything bought, as a list or as cards; add, edit, delete and restore; attach receipt photos |
 | Owners | Who holds each component. The project creator assigns items, members request items, the creator approves or declines |
-| Settle up | Shows who is above or below an equal split, the fewest payments to square up, and a record of payments made |
+| Settle up | Shows who is above or below an equal split, the fewest payments to square up, agreements waiting for confirmation, and a record of payments and agreements |
 | Project | Import past expenses (CSV or Excel, with a preview), Excel/CSV export, budget, categories, members, archive the project |
 
 Rules worth knowing:
@@ -23,6 +23,7 @@ Rules worth knowing:
 - Only the project creator manages members, budget, categories and archiving.
 - **Whole receipts:** when one receipt covers many components, use **Add expense > Whole receipt** (or **Add receipt** on the Expenses tab). Enter the date, who paid and the store once, list the items (you can paste a list, one item per line: `Jumper wires x3 45` means 3 pieces at 45 each), and type the receipt total. If the total is higher than the items (shipping, tax) or lower (a discount), the difference is spread across the items in proportion to their prices, so each item carries its fair share and the items add up to exactly the receipt total. One photo is shared by all items on the receipt.
 - **Discounts on a single item:** put a minus sign in Extra fees (for example `-50`). The item's total can never go below zero.
+- **Agreements and payments:** on Settle up, **New payment or agreement** lets you record money moving between two members. Choose **Ask them to confirm** and the other person gets a box on their Overview (and a number on the Overview tab) with **Confirm** and **Decline**. Until they confirm it does not change anyone's balance. Either person can propose ("I paid you" or "you owe me for the item I bought you"); the other one confirms. The proposer can cancel while it waits. A confirmed agreement can be undone only when the other person agrees. **Record it now** counts straight away, for deals made in person and for temporary members, who cannot sign in to confirm. Declined, cancelled and undone entries stay in History and never count. Only confirmed or directly recorded payments count in totals and exports.
 - **Temporary members:** add a member by name only (no email). You can record expenses for them and assign items to them straight away. When you have their email, open Project > Members and tap **Assign email**; the first time they sign in with it they are linked to that name and everything under it. An email can be assigned once.
 - **Component owners:** "owner" means who holds or keeps the item, which can differ from who paid. The creator assigns items on the Owners tab. Any member can request an item they do not hold (with a note); the creator sees a badge on the Owners tab and approves or declines. Approving assigns the item and closes other open requests for it.
 
@@ -103,6 +104,7 @@ js/api.js             all Supabase calls
 js/store.js           shared state
 js/settlement.js      equal split, balances, fewest payments (integer centavos)
 js/importer.js        spreadsheet to expenses
+js/views/agreements.js  waiting agreements: confirm, decline, cancel, undo
 js/batch.js           spreading a receipt total across its items, parsing pasted lists
 js/money.js, image.js, util.js
 js/views/             one file per screen (expenses, owners, settle, import, project, ...)

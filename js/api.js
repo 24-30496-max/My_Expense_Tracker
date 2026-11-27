@@ -130,6 +130,15 @@ export async function signedUrls(paths) {
 export const insertPayment = (row) => ok(sb.from('payments').insert(row));
 export const undoPayment = (id) => ok(sb.from('payments').update({ deleted_at: new Date().toISOString() }).eq('id', id));
 
+// Agreements: one person proposes, the other confirms (rules are enforced in the database).
+export const proposePayment = (r) => ok(sb.rpc('propose_payment', {
+  p_project: r.project_id, p_from: r.from_member, p_to: r.to_member, p_amount: r.amount_cents, p_paid_on: r.paid_on, p_note: r.note || null }));
+export const cancelPayment = (id) => ok(sb.rpc('cancel_payment', { p_id: id }));
+export const decidePayment = (id, confirm, reason = null) => ok(sb.rpc('decide_payment', { p_id: id, p_confirm: confirm, p_reason: reason }));
+export const requestUndo = (id) => ok(sb.rpc('request_undo', { p_id: id }));
+export const cancelUndo = (id) => ok(sb.rpc('cancel_undo', { p_id: id }));
+export const decideUndo = (id, approve) => ok(sb.rpc('decide_undo', { p_id: id, p_approve: approve }));
+
 // ---------- component owners and requests ----------
 export const assignComponent = (projectId, expenseId, memberId, userId) =>
   ok(sb.from('component_assignments').upsert(

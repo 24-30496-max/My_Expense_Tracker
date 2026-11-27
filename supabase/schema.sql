@@ -107,6 +107,15 @@ create table if not exists public.payments (
 );
 create index if not exists payments_project_idx on public.payments(project_id);
 
+-- Agreements: a payment can wait for the other person's OK before it counts.
+alter table public.payments add column if not exists status text not null default 'confirmed'
+  check (status in ('pending', 'confirmed', 'declined', 'cancelled', 'undone'));
+alter table public.payments add column if not exists proposed_by        uuid references public.project_members(id);
+alter table public.payments add column if not exists decided_by         uuid;
+alter table public.payments add column if not exists decided_at         timestamptz;
+alter table public.payments add column if not exists decline_reason     text;
+alter table public.payments add column if not exists undo_requested_by  uuid references public.project_members(id);
+
 -- ---------- Helper functions (used by the security rules) ----------
 
 create or replace function public.is_member(pid uuid) returns boolean
@@ -252,7 +261,9 @@ grant select, insert, update, delete on public.project_members to authenticated;
 grant select, insert, update on public.expenses to authenticated;
 grant select on public.expense_history to authenticated;
 grant select, insert, delete on public.receipts to authenticated;
-grant select, insert, update on public.payments to authenticated;
+grant select, insert on public.payments to authenticated;
+revoke update on public.payments from authenticated;
+grant update (deleted_at) on public.payments to authenticated;   -- direct payments only; agreements change through the functions below
 
 -- projects: members can read; only the creator can change settings / archive
 drop policy if exists projects_select on public.projects;
@@ -308,18 +319,134 @@ drop policy if exists receipts_delete on public.receipts;
 create policy receipts_delete on public.receipts for delete to authenticated
   using (can_edit_expense(expense_id));
 
--- payments: any member can record one; only its creator can undo it
+-- payments: "Record it now" inserts a counted payment directly; only its creator can undo it.
+-- Agreements (status pending/confirmed with proposed_by) are changed only by the functions below.
 drop policy if exists payments_select on public.payments;
 create policy payments_select on public.payments for select to authenticated
   using (is_member(project_id));
 drop policy if exists payments_insert on public.payments;
 create policy payments_insert on public.payments for insert to authenticated
   with check (is_member(project_id) and project_active(project_id) and created_by = auth.uid()
-              and member_in_project(from_member, project_id) and member_in_project(to_member, project_id));
+              and member_in_project(from_member, project_id) and member_in_project(to_member, project_id)
+              and status = 'confirmed' and proposed_by is null and decided_by is null
+              and decline_reason is null and undo_requested_by is null);
 drop policy if exists payments_update on public.payments;
 create policy payments_update on public.payments for update to authenticated
-  using (created_by = auth.uid() and project_active(project_id))
-  with check (created_by = auth.uid() and project_active(project_id));
+  using (created_by = auth.uid() and project_active(project_id) and proposed_by is null and status = 'confirmed')
+  with check (created_by = auth.uid() and project_active(project_id) and proposed_by is null and status = 'confirmed');
+
+-- ---------- Agreements between two members ----------
+-- The two people are payments.from_member and payments.to_member. Whoever proposes, the other confirms.
+
+create or replace function public.propose_payment(p_project uuid, p_from uuid, p_to uuid, p_amount bigint,
+                                                  p_paid_on date, p_note text) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare me uuid; other uuid; new_id uuid;
+begin
+  if not is_member(p_project) then raise exception 'You are not a member of this project'; end if;
+  if not project_active(p_project) then raise exception 'This project is archived'; end if;
+  if p_from = p_to then raise exception 'Choose two different members'; end if;
+  if p_amount is null or p_amount <= 0 then raise exception 'Enter an amount greater than zero'; end if;
+  if not (member_in_project(p_from, p_project) and member_in_project(p_to, p_project)) then
+    raise exception 'Both people must be members of this project'; end if;
+  if is_me(p_from) then me := p_from; other := p_to;
+  elsif is_me(p_to) then me := p_to; other := p_from;
+  else raise exception 'You can only ask for an agreement that involves you'; end if;
+  if not exists (select 1 from project_members where id = other and user_id is not null) then
+    raise exception 'That person has not signed in yet, so they cannot confirm. Use Record it now instead'; end if;
+  insert into payments (project_id, from_member, to_member, amount_cents, paid_on, note, created_by, status, proposed_by)
+  values (p_project, p_from, p_to, p_amount, coalesce(p_paid_on, current_date), nullif(trim(coalesce(p_note, '')), ''), auth.uid(), 'pending', me)
+  returning id into new_id;
+  return new_id;
+end $$;
+
+-- The proposer withdraws a waiting agreement.
+create or replace function public.cancel_payment(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare r payments;
+begin
+  select * into r from payments where id = p_id for update;
+  if not found then raise exception 'Agreement not found'; end if;
+  if r.proposed_by is null or not is_me(r.proposed_by) then raise exception 'Only the person who proposed it can cancel it'; end if;
+  if not project_active(r.project_id) then raise exception 'This project is archived'; end if;
+  if r.status <> 'pending' then raise exception 'This agreement was already decided'; end if;
+  update payments set status = 'cancelled', decided_by = auth.uid(), decided_at = now() where id = p_id;
+end $$;
+
+-- The other person confirms or declines.
+create or replace function public.decide_payment(p_id uuid, p_confirm boolean, p_reason text default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare r payments; other uuid;
+begin
+  select * into r from payments where id = p_id for update;
+  if not found then raise exception 'Agreement not found'; end if;
+  if r.proposed_by is null then raise exception 'This payment does not need confirming'; end if;
+  other := case when r.proposed_by = r.from_member then r.to_member else r.from_member end;
+  if not is_me(other) then raise exception 'Only the other person can confirm or decline this'; end if;
+  if not project_active(r.project_id) then raise exception 'This project is archived'; end if;
+  if r.status <> 'pending' then raise exception 'This agreement was already decided or cancelled'; end if;
+  update payments
+     set status = case when p_confirm then 'confirmed' else 'declined' end,
+         decided_by = auth.uid(), decided_at = now(),
+         decline_reason = case when p_confirm then null else nullif(trim(coalesce(p_reason, '')), '') end
+   where id = p_id;
+end $$;
+
+-- Undo of a confirmed agreement needs the other person's OK.
+create or replace function public.request_undo(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare r payments; me uuid;
+begin
+  select * into r from payments where id = p_id for update;
+  if not found then raise exception 'Agreement not found'; end if;
+  if r.proposed_by is null or r.status <> 'confirmed' or r.deleted_at is not null then raise exception 'This cannot be undone this way'; end if;
+  if not project_active(r.project_id) then raise exception 'This project is archived'; end if;
+  if is_me(r.from_member) then me := r.from_member; elsif is_me(r.to_member) then me := r.to_member;
+  else raise exception 'Only the two people in this agreement can ask to undo it'; end if;
+  if r.undo_requested_by is not null then raise exception 'An undo is already waiting'; end if;
+  update payments set undo_requested_by = me where id = p_id;
+end $$;
+
+create or replace function public.cancel_undo(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+declare r payments;
+begin
+  select * into r from payments where id = p_id for update;
+  if not found then raise exception 'Agreement not found'; end if;
+  if r.undo_requested_by is null or not is_me(r.undo_requested_by) then raise exception 'Only the person who asked can withdraw the undo'; end if;
+  if not project_active(r.project_id) then raise exception 'This project is archived'; end if;
+  update payments set undo_requested_by = null where id = p_id;
+end $$;
+
+create or replace function public.decide_undo(p_id uuid, p_approve boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare r payments; other uuid;
+begin
+  select * into r from payments where id = p_id for update;
+  if not found then raise exception 'Agreement not found'; end if;
+  if r.undo_requested_by is null then raise exception 'Nobody asked to undo this'; end if;
+  other := case when r.undo_requested_by = r.from_member then r.to_member else r.from_member end;
+  if not is_me(other) then raise exception 'Only the other person can answer an undo request'; end if;
+  if not project_active(r.project_id) then raise exception 'This project is archived'; end if;
+  if p_approve then
+    update payments set status = 'undone', deleted_at = now(), decided_by = auth.uid(), decided_at = now() where id = p_id;
+  else
+    update payments set undo_requested_by = null where id = p_id;
+  end if;
+end $$;
+
+revoke all on function public.propose_payment(uuid, uuid, uuid, bigint, date, text) from public, anon;
+revoke all on function public.cancel_payment(uuid) from public, anon;
+revoke all on function public.decide_payment(uuid, boolean, text) from public, anon;
+revoke all on function public.request_undo(uuid) from public, anon;
+revoke all on function public.cancel_undo(uuid) from public, anon;
+revoke all on function public.decide_undo(uuid, boolean) from public, anon;
+grant execute on function public.propose_payment(uuid, uuid, uuid, bigint, date, text) to authenticated;
+grant execute on function public.cancel_payment(uuid) to authenticated;
+grant execute on function public.decide_payment(uuid, boolean, text) to authenticated;
+grant execute on function public.request_undo(uuid) to authenticated;
+grant execute on function public.cancel_undo(uuid) to authenticated;
+grant execute on function public.decide_undo(uuid, boolean) to authenticated;
 
 -- ---------- Component owners and requests ----------
 -- "Owner" of a component = the member who holds/keeps it (not necessarily who paid).

@@ -97,3 +97,29 @@ const expenseAlive = (id) => state.expenses.some((e) => e.id === id && !e.delete
 export const pendingRequests = () => state.requests.filter((r) => r.status === 'pending' && expenseAlive(r.expense_id));
 export const myPendingFor = (expenseId) =>
   state.requests.find((r) => r.status === 'pending' && r.expense_id === expenseId && state.me && r.requester_member === state.me.id);
+
+// ---------- agreements (payments that wait for the other person's OK) ----------
+const otherSide = (p, memberId) => (p.from_member === memberId ? p.to_member : p.from_member);
+/** Waiting agreements, newest first. */
+export const waitingAgreements = () => state.payments.filter((p) => p.status === 'pending');
+/** Things that need MY answer: agreements to confirm, and undo requests from the other person. */
+export function needsMyAnswer() {
+  const me = state.me && state.me.id;
+  if (!me) return { confirm: [], undo: [] };
+  return {
+    confirm: waitingAgreements().filter((p) => p.proposed_by && p.proposed_by !== me && (p.from_member === me || p.to_member === me)),
+    undo: state.payments.filter((p) => p.status === 'confirmed' && !p.deleted_at && p.undo_requested_by && p.undo_requested_by !== me && (p.from_member === me || p.to_member === me)),
+  };
+}
+/** Things I sent that are still waiting for the other person. */
+export function myWaiting() {
+  const me = state.me && state.me.id;
+  if (!me) return { proposals: [], undo: [] };
+  return {
+    proposals: waitingAgreements().filter((p) => p.proposed_by === me),
+    undo: state.payments.filter((p) => p.status === 'confirmed' && !p.deleted_at && p.undo_requested_by === me),
+  };
+}
+export const answersNeeded = () => { const n = needsMyAnswer(); return n.confirm.length + n.undo.length; };
+export const canConfirmWith = (memberId) => { const m = state.members.find((x) => x.id === memberId); return !!(m && m.user_id); };
+export { otherSide };

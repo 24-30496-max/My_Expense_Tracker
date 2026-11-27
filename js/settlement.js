@@ -32,6 +32,11 @@ export function isCounted(e) {
   return !e.deleted_at && e.status !== 'needed';
 }
 
+/** A payment counts once it is confirmed (or was recorded directly) and has not been undone. */
+export function isPaymentCounted(p) {
+  return !p.deleted_at && (p.status || 'confirmed') === 'confirmed';
+}
+
 /**
  * balance = paid - fair share + payments sent - payments received.
  * Positive: the group owes this member. Negative: this member owes the group.
@@ -51,7 +56,7 @@ export function computeBalances({ members, expenses, payments = [] }) {
     for (const id of ids) rows[id].share += shares[id];
   }
   for (const p of payments) {
-    if (p.deleted_at) continue;
+    if (!isPaymentCounted(p)) continue;
     if (rows[p.from_member]) rows[p.from_member].sent += p.amount_cents;
     if (rows[p.to_member]) rows[p.to_member].received += p.amount_cents;
   }
